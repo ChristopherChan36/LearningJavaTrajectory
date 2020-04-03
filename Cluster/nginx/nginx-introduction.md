@@ -30,7 +30,7 @@
 
 ## 二、Nginx 入门
 
-> 详细安装方法请参考：[Nginx 运维](nginx/nginx-ops.md)
+> 详细安装方法请参考：[Nginx 运维](nginx-ops.md)
 
 nginx 的使用比较简单，就是几条命令。
 
