@@ -179,7 +179,7 @@ $ systemctl enable nginx.service
 
 如果采用源码编译方式，需要手动创建 nginx.service 文件。
 
-详情参考：[centos 7.x编写开机启动服务](./linux/linux-centos-start.md)
+详情参考：[centos 7.x编写开机启动服务](../linux/linux-centos-start.md)
 
 ## Docker 安装
 
