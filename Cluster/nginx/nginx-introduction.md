@@ -32,11 +32,13 @@
 
 > 详细安装方法请参考：[Nginx 运维](nginx-ops.md)
 
+### Nginx 常用命令
+
 nginx 的使用比较简单，就是几条命令。
 
 常用到的命令如下：
 
-```batch
+```bash
 nginx -s stop       快速关闭Nginx，可能不保存相关信息，并迅速终止web服务。
 nginx -s quit       平稳关闭Nginx，保存相关信息，有安排的结束web服务。
 nginx -s reload     因改变了Nginx相关配置，需要重新加载配置而重载。
@@ -49,7 +51,7 @@ nginx -V            显示 nginx 的版本，编译器版本和配置参数。
 
 如果不想每次都敲命令，可以在 nginx 安装目录下新添一个启动批处理文件**startup.bat**，双击即可运行。内容如下：
 
-```batch
+```bash
 @echo off
 rem 如果启动前已经启动nginx并记录下pid文件，会kill指定进程
 nginx.exe -s stop
@@ -65,6 +67,22 @@ nginx.exe -c conf/nginx.conf
 ```
 
 如果是运行在 Linux 下，写一个 shell 脚本，大同小异。
+
+### Nginx 的 Master-Worker 模式
+
+![Master-Worker 模式](https://blog-figure-bed.oss-cn-shanghai.aliyuncs.com/2020/03/2020-04-03-160633.png)
+
+启动Nginx后，其实就是在80端口启动了Socket服务（master）进行监听，如图所示，Nginx涉及Master进程和Worker进程。
+
+![Master-Worker 模式-2](https://blog-figure-bed.oss-cn-shanghai.aliyuncs.com/2020/03/2020-04-03-160835.jpg)
+
+#### Master进程的作用
+
+**读取并验证配置文件nginx.conf；管理worker进程；**
+
+#### Worker进程的作用
+
+**每一个Worker进程都维护一个线程（避免线程切换），处理连接和请求；注意Worker进程的个数由配置文件决定，一般和CPU个数相关（有利于进程切换），配置几个就有几个Worker进程。**
 
 ## 三、Nginx 实战
 

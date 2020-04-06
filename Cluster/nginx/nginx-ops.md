@@ -1,6 +1,6 @@
-# Nginx 运维
+# Nginx 运维（安装与使用）
 
-## 一、普通安装
+## 普通安装
 
 ### Windows安装
 
@@ -179,7 +179,9 @@ $ systemctl enable nginx.service
 
 如果采用源码编译方式，需要手动创建 nginx.service 文件。
 
-## 二、Docker 安装
+详情参考：[centos 7.x编写开机启动服务](./linux/linux-centos-start.md)
+
+## Docker 安装
 
 - 官网镜像：https://hub.docker.com/_/nginx/
 - 下载镜像：`docker pull nginx`
@@ -188,7 +190,7 @@ $ systemctl enable nginx.service
 - 停止服务：`docker exec -it my-nginx nginx -s stop` 或者：`docker stop my-nginx`
 - 重新启动服务：`docker restart my-nginx`
 
-## 三、脚本
+## 脚本安装
 
 > CentOS7 环境安装脚本：[软件运维配置脚本集合](https://github.com/dunwu/linux-tutorial/tree/master/codes/linux/soft)
 
@@ -213,7 +215,187 @@ wget -qO- https://gitee.com/turnon/linux-tutorial/raw/master/codes/linux/soft/ng
 sh nginx-install.sh [version]
 ```
 
+## Nginx 日志切割
+
+现有的日志都会存在 `access.log` 文件中，但是随着时间的推移，这个文件的内容会越来越多，体积会越来越大，不便于运维人员查看，所以我们可以通过把这个大的日志文件切割为多份不同的小文件作为日志，切割规则可以以`天`为单位，如果每天有几百G或者几个T的日志的话，则可以按需以`每半天`或者`每小时`对日志切割一下。
+
+### 手动日志切割
+
+**具体步骤如下：**
+
+1. 创建一个shell可执行文件：`cut_log.sh`，内容为：
+
+```bash
+#!/bin/bash
+LOG_PATH="/var/log/nginx/"
+RECORD_TIME=$(date -d "yesterday" +%Y-%m-%d+%H:%M)
+PID=/var/run/nginx/nginx.pid
+mv ${LOG_PATH}/access.log ${LOG_PATH}/access.${RECORD_TIME}.log
+mv ${LOG_PATH}/error.log ${LOG_PATH}/error.${RECORD_TIME}.log
+
+#向Nginx主进程发送信号，用于重新打开日志文件
+kill -USR1 `cat $PID`
+```
+
+2. 为`cut_log.sh`添加可执行的权限：
+
+```bash
+chmod +x cut_log.sh
+```
+
+3. 测试日志切割后的结果:
+
+```bash
+./cut_log.sh
+```
+
+### 使用定时任务
+
+1. 安装定时任务：
+
+   ```bash
+   yum install crontabs
+   ```
+
+2. `crontab -e` 编辑并且添加一行新的任务：
+
+   ```bash
+   */1 * * * * /usr/local/nginx/sbin/cut_log.sh
+   ```
+
+3. 重启定时任务：
+
+   ```bash
+   service crond restart
+   systemctl restart crond.service
+   ```
+
+- 附：常用定时任务命令：
+
+  ```bash
+  service crond start         // 启动服务
+  service crond stop          // 关闭服务
+  service crond restart       // 重启服务
+  service crond reload        // 重新载入配置
+  crontab -e                  // 编辑任务
+  crontab -l                  // 查看任务列表
+  ```
+
+### 定时任务表达式：
+
+Cron表达式是，分为5或6个域，每个域代表一个含义，如下所示：
+
+|          | 分   | 时   | 日   | 月   | 星期几 | 年（可选）       |
+| :------- | :--- | :--- | :--- | :--- | :----- | :--------------- |
+| 取值范围 | 0-59 | 0-23 | 1-31 | 1-12 | 1-7    | 2019/2020/2021/… |
+
+### 常用表达式：
+
+- 每分钟执行：
+
+  ```
+  */1 * * * *
+  ```
+
+- 每日凌晨（每天晚上23:59）执行：
+
+  ```
+  59 23 * * *
+  ```
+
+- 每日凌晨1点执行：
+
+  ```
+  0 1 * * *
+  ```
+
+## 使用 Gzip 压缩提升请求速度
+
+```bash
+# 开启 gzip 压缩功能，目的：提高传输效率，节约服务器带宽
+gzip  on;
+# 限制最小压缩，小于 1 字节文件不会压缩
+gzip_min_length 1;
+# 设置图片压缩级别（压缩比，文件越大，压缩越多，但是 CPU 使用会越多）
+gzip_comp_level 3;
+# 定义压缩文件的类型
+gzip_types text/plain application/javascript application/x-javascript text/css application/xml text/javascript application/x-httpd-php image/jpeg image/gif image/png application/json;
+```
+
+## root 与 alias
+
+假如服务器路径为：/home/imooc/files/img/face.png
+
+- root 路径完全匹配访问
+
+配置的时候为：
+
+```bash
+location /imooc {
+	root /home
+}
+```
+
+用户访问的时候请求为：`url:port/imooc/files/img/face.png`
+
+- alias 可以为你的路径做一个别名，对用户透明
+
+配置的时候为：
+
+```bash
+location /hello {
+	alias /home/imooc
+}
+```
+
+用户访问的时候请求为：`url:port/hello/files/img/face.png`，如此相当于为目录`imooc`做一个自定义的别名。
+
+## location 的匹配规则
+
+- `空格`：默认匹配，普通匹配
+
+  ```bash
+  location / {
+       root /home;
+  }
+  ```
+
+- `=`：精确匹配
+
+  ```bash
+  location = /imooc/img/face1.png {
+      root /home;
+  }
+  ```
+
+- `~*`：匹配正则表达式，不区分大小写
+
+  ```bash
+  #符合图片的显示
+  location ~* .(GIF|jpg|png|jpeg) {
+      root /home;
+  }
+  ```
+
+- `~`：匹配正则表达式，区分大小写
+
+  ```bash
+  #GIF必须大写才能匹配到
+  location ~ .(GIF|jpg|png|jpeg) {
+      root /home;
+  }
+  ```
+
+- `^~`：以某个字符路径开头
+
+  ```bash
+  location ^~ /imooc/img {
+      root /home;
+  }
+  ```
+
 ## 参考资料
 
 - http://www.dohooe.com/2016/03/03/352.html?utm_source=tuicool&utm_medium=referral
 - [nginx+keepalived实现nginx双主高可用的负载均衡](https://blog.51cto.com/kling/1253474)
+- 每天定时为数据库备份：[腾讯云服务器 - 定时备份MariaDB/MySQL](https://www.cnblogs.com/leechenxiang/p/7110382.html) 
