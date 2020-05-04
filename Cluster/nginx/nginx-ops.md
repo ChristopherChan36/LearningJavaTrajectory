@@ -215,11 +215,106 @@ wget -qO- https://gitee.com/turnon/linux-tutorial/raw/master/codes/linux/soft/ng
 sh nginx-install.sh [version]
 ```
 
-## Nginx 日志切割
+## Nginx 初步配置
+
+### nginx.conf 配置结构
+
+- main 全局配置
+  - event 配置工作模式以及连接数
+  - http http 模块相关配置
+    - server 虚拟主机配置，可以配置多个
+      - location 路由规则，表达式
+      - upstream 集群，内网服务器
+
+在前面搭建好 Nginx 环境后，编译的 Nginx 根路径为 /usr/local/nginx，那么对应的配置文件为 /usr/local/nginx/conf/nginx.conf ，直接用 cat 命令查看这里的配置文件内容（删除掉了原配置文件中的英文注释，并对主要配置项增加中文注释）：
+
+```bash
+    $ cat /root/nginx/conf/nginx.conf
+
+		# 设置worker进程的用户，指的linux中的用户，会涉及到nginx操作目录或文件的一些权限，默认为`nobody`
+		user root;
+    # worker进程工作数设置，一般来说CPU有几个，就设置几个，或者设置为N-1也行
+    worker_processes  1;
+    
+    # nginx 日志级别`debug | info | notice | warn | error | crit | alert | emerg`，错误级别从左到右越来越大
+    # error_log logs/error.log info
+    
+    # 设置nginx进程 pid
+    # pid        logs/nginx.pid;
+
+    # 设置工作模式
+    events {
+    		# 默认使用 epoll
+    		use epoll;
+    		# 设置每个worker进程的最大连接数，它决定了Nginx的并发能力
+        worker_connections  1024;
+    }
+
+    # http 是指令块，针对http网络传输的一些指令配置
+    http {
+    		# include 引入外部配置，提高可读性，避免单个配置文件过大
+        include      mime.types;
+        default_type  application/octet-stream;
+
+				# 设定日志格式，`main`为定义的格式名称，如此 access_log 就可以直接使用这个变量了
+        # 注释了日志格式的配置，使用默认
+        ...
+
+				# sendfile使用高效文件传输，提升传输性能。
+				# 启用后才能使用`tcp_nopush`，是指当数据表累积一定大小后才发送，提高了效率。
+        sendfile        on;
+        tcp_nopush      on;
+
+        # 重要参数，是一个请求完成之后还要保持连接多久，不是请求时间多久，
+        # 目的是保持长连接，减少创建连接过程给系统带来的性能损耗
+        keepalive_timeout  65;
+        
+        # gzip启用压缩，html/js/css压缩后传输会更快
+        gzip    on;
+
+        # server块配置
+        server {
+            # 监听80端口
+            listen       80;
+            server_name  localhost;
+
+            # 匹配url /，会在html目录下，访问index.html或index.htm文件
+            location / {
+                root   html;
+                index  index.html index.htm;
+            }
+
+            # 指定500 502 503 504出错的错误页面
+            error_page   500 502 503 504  /50x.html;
+            location = /50x.html {
+                root   html;
+            }
+        }
+    }  
+```
+
+
+
+设定日志格式，`main`为定义的格式名称，如此 access_log 就可以直接使用这个变量了
+![](https://blog-figure-bed.oss-cn-shanghai.aliyuncs.com/2020/03/2020-05-04-153849.jpg)
+
+| 参数名                | 参数意义                             |
+| :-------------------- | :----------------------------------- |
+| $remote_addr          | 客户端ip                             |
+| $remote_user          | 远程客户端用户名，一般为：’-’        |
+| $time_local           | 时间和时区                           |
+| $request              | 请求的url以及method                  |
+| $status               | 响应状态码                           |
+| $body_bytes_send      | 响应客户端内容字节数                 |
+| $http_referer         | 记录用户从哪个链接跳转过来的         |
+| $http_user_agent      | 用户所使用的代理，一般来时都是浏览器 |
+| $http_x_forwarded_for | 通过代理服务器来记录客户端的ip       |
+
+### Nginx 日志切割
 
 现有的日志都会存在 `access.log` 文件中，但是随着时间的推移，这个文件的内容会越来越多，体积会越来越大，不便于运维人员查看，所以我们可以通过把这个大的日志文件切割为多份不同的小文件作为日志，切割规则可以以`天`为单位，如果每天有几百G或者几个T的日志的话，则可以按需以`每半天`或者`每小时`对日志切割一下。
 
-### 手动日志切割
+#### 手动日志切割
 
 **具体步骤如下：**
 
@@ -249,7 +344,7 @@ chmod +x cut_log.sh
 ./cut_log.sh
 ```
 
-### 使用定时任务
+#### 使用定时任务
 
 1. 安装定时任务：
 
@@ -281,7 +376,7 @@ chmod +x cut_log.sh
   crontab -l                  // 查看任务列表
   ```
 
-### 定时任务表达式：
+#### 定时任务表达式：
 
 Cron表达式是，分为5或6个域，每个域代表一个含义，如下所示：
 
@@ -289,7 +384,7 @@ Cron表达式是，分为5或6个域，每个域代表一个含义，如下所�
 | :------- | :--- | :--- | :--- | :--- | :----- | :--------------- |
 | 取值范围 | 0-59 | 0-23 | 1-31 | 1-12 | 1-7    | 2019/2020/2021/… |
 
-### 常用表达式：
+#### 常用表达式：
 
 - 每分钟执行：
 
@@ -309,7 +404,7 @@ Cron表达式是，分为5或6个域，每个域代表一个含义，如下所�
   0 1 * * *
   ```
 
-## 使用 Gzip 压缩提升请求速度
+### 使用 Gzip 压缩提升请求速度
 
 ```bash
 # 开启 gzip 压缩功能，目的：提高传输效率，节约服务器带宽
@@ -322,7 +417,7 @@ gzip_comp_level 3;
 gzip_types text/plain application/javascript application/x-javascript text/css application/xml text/javascript application/x-httpd-php image/jpeg image/gif image/png application/json;
 ```
 
-## root 与 alias
+### root 与 alias
 
 假如服务器路径为：/home/imooc/files/img/face.png
 
@@ -350,7 +445,7 @@ location /hello {
 
 用户访问的时候请求为：`url:port/hello/files/img/face.png`，如此相当于为目录`imooc`做一个自定义的别名。
 
-## location 的匹配规则
+### location 的匹配规则
 
 - `空格`：默认匹配，普通匹配
 

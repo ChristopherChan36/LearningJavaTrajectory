@@ -1,18 +1,48 @@
 # 深入浅出搞懂 Nginx
 
-> Nginx是一款轻量级的Web服务器、反向代理服务器，由于它的内存占用少，启动极快，高并发能力强，在互联网项目中广泛应用。
+> **Nginx（engine x）**是一款开源、高性能、轻量级的 HTTP 和反向代理 Web 服务器，由于它的内存占用少，启动极快，高并发能力强，在互联网项目中广泛应用。
 
 ## 一、Nginx 简介
 
-### 什么是 Nginx ?
+### 什么是 Nginx
 
 **Nginx (engine x)** 是一款轻量级的 Web 服务器 、反向代理服务器及电子邮件（IMAP/POP3）代理服务器。
 
 ![NGINX 架构图](https://blog-figure-bed.oss-cn-shanghai.aliyuncs.com/2020/04/15859260628695.jpg)
 
-上图基本上说明了当下流行的技术架构，其中 Nginx 类似于入口网关的作用。
+上图基本上说明了当下流行的技术架构，其中 Nginx 类似于入口**网关**的作用。
 
-### 什么是反向代理 ？
+### Nginx 使用场景
+
+Nginx 的使用场景如下：
+
+**HTTP 服务器**
+
+Nginx 作为 Web 服务器能独立提供 Http 服务。另外，我们常常通过 Nginx 作为**静态资源**服务器来访问服务器上的静态资源，比如对于最新热门的**前后端分离架构**，前端打好包后直接放到某个地址，在 Nginx 配置后可以通过 Nginx 来访问主机上的前端页面。
+
+**反向代理**
+
+反向代理（Reverse Proxy）方式是指以代理服务器来接受 Internet 上的连接请求，然后将请求转发给内部网络上的服务器，并将从服务器上得到的结果返回给 Internet 上请求连接的客户端，此时代理服务器对外就表现为一个反向代理服务器。这样的好处是，将不暴露内部的服务地址，只统一使用一个公共出口，通过 URI 匹配转发到不同的内部服务处理请求。
+
+**负载均衡**
+
+负载均衡也是 Nginx 的一个高频使用场景，对于下游存在的多个相同服务，可以将请求采用某种策略（随机、轮询、权重）发到相应的服务处理。这样由于多个相同服务的存在，可以实现高可用功能，在一个服务不可用时，Nginx 会自动发现并将其剔出服务集群，将请求转发给正常的服务进行处理。
+
+**第三方插件**
+
+基于第三方插件，Nginx 可以完成各种各样复杂的功能，全方位满足程序员的想法。比如在 Nginx 中引入 lua 模块，可以实现对 Http 请求更细粒度的限制，包括限速、限流、校验认证等等。后续，在 Nginx 上发展出来的 OpenResty 已经应用到了微服务网关方向。
+
+### Web 服务器的市场情况
+
+[Netcraft公司官网](https://news.netcraft.com/) 每月公布的全球 Web 服务器调查报告“Web Server Survey”是当前人们了解全球网站数量以及服务器市场分额情况的主要参考依据，2020 年 4 月份的报告目前已经发布，我们来一睹为快。
+
+![](https://blog-figure-bed.oss-cn-shanghai.aliyuncs.com/2020/03/2020-05-04-124447.png)
+
+![image-20200504204528143](https://blog-figure-bed.oss-cn-shanghai.aliyuncs.com/2020/03/2020-05-04-124528.png)
+
+可以明显看到，**Nginx 已经确确实实处于 Web 服务器市场的领先地位，成功超过了老大哥 Apache，千年老二至此翻身当上了大哥。**
+
+### 什么是反向代理
 
 经常听人说到一些术语，比如反向代理，那么什么是反向代理呢？什么又是正向代理？
 
@@ -20,7 +50,7 @@
 
 ![](https://blog-figure-bed.oss-cn-shanghai.aliyuncs.com/2020/04/15859263037103.jpg)
 
-由于防火墙的原因，我们并不能直接访问谷歌，那么我们可以借助 VPN 来实现，这就是一个简单的正向代理的例子。这里你能够发现，正向代理“代理”的是客户端，而且客户端是知道目标的，而目标是不知道客户端是通过 VPN 访问的。
+例如：由于防火墙的原因，我们并不能直接访问谷歌，那么我们可以借助 VPN 来实现，这就是一个简单的正向代理的例子。这里你能够发现，正向代理『代理』的是客户端，而且客户端是知道目标的，而目标是不知道客户端是通过 VPN 访问的。
 
 **反向代理**
 
@@ -37,8 +67,6 @@
 更多关于反向代理以及负载均衡点击[这里](nginx-balance.md)查看。
 
 ## 二、Nginx 入门
-
-> 详细安装方法请参考：[Nginx 运维](nginx-ops.md)
 
 ### Nginx 常用命令
 
@@ -57,32 +85,21 @@ nginx -v            显示 nginx 的版本。
 nginx -V            显示 nginx 的版本，编译器版本和配置参数。
 ```
 
-如果不想每次都敲命令，可以在 nginx 安装目录下新添一个启动批处理文件**startup.bat**，双击即可运行。内容如下：
-
-```bash
-@echo off
-rem 如果启动前已经启动nginx并记录下pid文件，会kill指定进程
-nginx.exe -s stop
-
-rem 测试配置文件语法正确性
-nginx.exe -t -c conf/nginx.conf
-
-rem 显示版本信息
-nginx.exe -v
-
-rem 按照指定配置去启动nginx
-nginx.exe -c conf/nginx.conf
-```
-
-如果是运行在 Linux 下，写一个 shell 脚本，大同小异。
-
 ### Nginx 的 Master-Worker 模式
+
+Nginx 的进程模型采用了 Master/Workers 进程池的机制，即通常情况下，Nginx 会启动一个 Master 进程（当然，也可以无 master 进程）和多个 Worker 进程对外提供服务。Master 进程是监控进程，本身并不处理具体的 TCP 和 HTTP 请求，只负责接受 UNIX 信号，管理 Worker 进程，类似于工地的包工头。
+
+Worker 进程是比较累的，负责处理客户端的连接请求，它充分利用了 Linux 系统中的 epoll、kqueue 等机制，高效处理 TCP 和 HTTP 请求，利用这些特点，**Nginx 充分挖掘了服务器的潜能，让服务器更快响应用户请求。**
+
+一般情况下，10000 个非活跃的 HTTP Keep-Alive 连接在 Nginx 中仅仅消耗 2.5M 内存，这是 Nginx 支持高并发连接的基础，体现了 Nginx 高性能的特点。另外，由于官方提供的模块都非常稳定，每个 Worker 进程都相对独立，Woker 进程出错时，Master 进程会立马感知到并快速拉起新的 Worker 子进程不间断提供服务，保证服务的稳定性。
+
+**nginx的进程模型**
 
 ![Master-Worker 模式](https://blog-figure-bed.oss-cn-shanghai.aliyuncs.com/2020/03/2020-04-03-160633.png)
 
 启动Nginx后，其实就是在80端口启动了Socket服务（master）进行监听，如图所示，Nginx涉及Master进程和Worker进程。
 
-![Master-Worker 模式-2](https://blog-figure-bed.oss-cn-shanghai.aliyuncs.com/2020/03/2020-04-03-160835.jpg)
+![Nginx 的 Master-Worker 模式](https://blog-figure-bed.oss-cn-shanghai.aliyuncs.com/2020/03/2020-05-04-140201.png)
 
 #### Master进程的作用
 
@@ -92,9 +109,9 @@ nginx.exe -c conf/nginx.conf
 
 **每一个Worker进程都维护一个线程（避免线程切换），处理连接和请求；注意Worker进程的个数由配置文件决定，一般和CPU个数相关（有利于进程切换），配置几个就有几个Worker进程。**
 
-## 三、Nginx 实战
+> 详细安装方法及相应配置详解请参考：[Nginx 运维](nginx-ops.md)
 
-我始终认为，各种开发工具的配置还是结合实战来讲述，会让人更易理解。
+## 三、Nginx 实战
 
 ### 解决跨域
 
