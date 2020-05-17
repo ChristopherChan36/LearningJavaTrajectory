@@ -111,7 +111,7 @@ Worker 进程是比较累的，负责处理客户端的连接请求，它充分�
 
 > 详细安装方法及相应配置详解请参考：[Nginx 运维](nginx-ops.md)
 
-## 三、Nginx 实战
+## 三、Nginx 进阶与实战
 
 ### 解决跨域
 
@@ -203,174 +203,272 @@ server {
 
 到此，就完成了。
 
-### Http 反向代理
+###  Nginx 防盗链配置
 
-我们先实现一个小目标：不考虑复杂的配置，仅仅是完成一个 http 反向代理。
+#### 什么是盗链?
 
-`nginx.conf` 配置文件如下：
+百度百科的解释如下:
 
-> ***注：`conf/nginx.conf` 是 nginx 的默认配置文件。你也可以使用 nginx -c 指定你的配置文件***
+> 盗链是指服务提供商自己不提供服务的内容，通过技术手段绕过其它有利益的最终用户界面（如广告），直接在自己的网站上向最终用户提供其它服务提供商的服务内容，骗取最终用户的浏览和点击率。受益者不提供资源或提供很少的资源，而真正的服务提供商却得不到任何的收益。
+
+盗链在如今的互联网世界无处不在，盗图，盗视频、盗文章等等，都是通过获取正规网站的图片、视频、文章等的 url 地址，直接放到自己网站上使用而未经授权。 Nginx 在代理这类静态资源(图片、视频、文章等)时，可以通过配置实现防盗连的功能。
+
+#### 如何防盗链？
+
+前面介绍到，盗链是直接使用正规网站保存图片、视频等的 URL 以获取相应的资源。最简单的防盗想法就是根据客户端请求资源时所携带的一些关键信息来验证请求的合法性，比如客户端 IP、请求 URL 中携带的 referer，如果不合法则直接拒绝请求。此外，由于这些基础信息都可以伪造，因此这样的基础手段也不一定安全。此外，还有登录认证、使用 cookie 等其他防盗连手段。另外，针对特定场景，比如流媒体直播中还有更为高级的防盗手段包括时间戳防盗链、swf 防盗链、回源鉴权防盗链等。
+
+#### Nginx中防盗链配置
+
+##### refer模块防盗
+
+Nginx 用于实现防盗链功能的模块为 refer 模块,其依据的原理是: 如果网站盗用了你的图片，那么用户在点击或者查看这个盗链内容时，发送 http 请求的头部中的 referer 字段将为该盗版网站的 url。这样我们通过获取这个头部信息，知道 http 发起请求的页面，然后判断这个地址是否是我们的合法页面，不是则判断为盗链。Nginx 的 referer 模块中有3个指令，用法分别如下：
 
 ```nginx
-#运行用户
-#user somebody;
+Syntax:	referer_hash_bucket_size size;
+Default: referer_hash_bucket_size 64;
+Context: server, location
 
-#启动进程,通常设置成和cpu的数量相等
-worker_processes  1;
+Syntax:	referer_hash_max_size size;
+Default: referer_hash_max_size 2048;
+Context: server, location
 
-#全局错误日志
-error_log  D:/Tools/nginx-1.10.1/logs/error.log;
-error_log  D:/Tools/nginx-1.10.1/logs/notice.log  notice;
-error_log  D:/Tools/nginx-1.10.1/logs/info.log  info;
+Syntax:	valid_referers none | blocked | server_names | string ...;
+Default: —
+Context: server, location
+```
 
-#PID文件，记录当前启动的nginx的进程ID
-pid        D:/Tools/nginx-1.10.1/logs/nginx.pid;
+最重要的是 valid_referers 指令，它后面可以带上多个参数，表示多个 referer 头都是有效的。它的参数形式有:
 
-#工作模式及连接数上限
-events {
-    worker_connections 1024;    #单个后台worker process进程的最大并发链接数
+- none: 允许缺失 referer 头部的请求访问
+- blocked: 有 referer 这个字段，但是其值被防火墙或者是代理给删除了
+- server_names: 若 referer 中的站点域名和 server_names 中的某个域名匹配，则允许访问
+- 任意字符或者正则表达式
+
+**Nginx 会通过查看 referer 字段和 valid_referers 后面的 referer 列表进行匹配，如果匹配到了就将内置的变量$invalid_referer值设置为0，否则设置该值为1**
+
+这样一个简单的 Nginx 防盗链配置如下:
+
+```bash
+...
+    location / {
+    #对源站点验证
+       valid_referers none blocked *.domain.pub www.domain.com/nginx server_names ~\.baidu\.;
+       #非法引入会进入下方判断
+       if ($invalid_referer) {
+          return 403;
+       }
+       return 200 "valid\n";
+   }
+...
+```
+
+##### secure_link模块防盗
+
+前面这种简单检查 referer 头部值的防盗链方法过于脆弱，盗用者很容易通过伪造 referer 的值轻而易举跳过防盗措施。在 Nginx 中有一种更为高级的防盗方式，即基于 secure_link 模块，该模块能够检查请求链接的权限以及是否过期，多用于下载服务器防盗链。这个模块默认未编译进 Nginx，需要在源码编译时候使用 `--with-secure_link_module` 添加。
+
+该模块的通过验证 URL 中的哈希值的方式防盗链。它的防盗过程如下：
+
+- 由服务器或者 Nginx 生成安全的加密后的 URL, 返回给客户端;
+- 客户端使用安全的 URL 访问 Nginx，获取图片等资源，由 Nginx 的 secure_link 变量判断是否验证通过;
+
+secure_link 模块中总共有3个指令，其格式和说明分别如下：
+
+```nginx
+Syntax:	secure_link expression;
+Default: —
+Context: http, server, location
+
+Syntax:	secure_link_md5 expression;
+Default: —
+Context: http, server, location
+
+Syntax:	secure_link_secret word;
+Default: —
+Context: location
+```
+
+通过配置 secure_link, secure_link_md5 指令，可实现对链接进行权限以及过期检查判断的功能。
+
+和 referer 模块中的 $invalid_referer 变量一样，secure_link 模块也是通过内置变量 KaTeX parse error: Expected 'EOF', got '判' at position 14: secure\_link 判̲断验证是否通过。secure_link 的值有如下三种情况：
+
+- 空字符串: 验证不通过
+- 0: URL 过期
+- 1: 验证通过
+
+通常使用这个模块进行 URL 校验，我们需要考虑的是如何生成合法的 URL ？另外，需要在 Nginx 中做怎样的配置才可以校验这个 URL？
+
+对于第一个问题，生成合法的 URL 和 指令 secure_link_md5 有关。例如:
+
+```shell
+secure_link_md5 "$secure_link_expires$uri$remote_addr secret";
+```
+
+如果 Nginx 中secure_link_md5 是上述配置，那么生成合法 url 的命令如下:
+
+```shell
+# 2020-02-05 21:00:00 转换成时间戳为1580907600
+echo -n '1580907600/test.png127.0.0.1 secret' | \
+    openssl md5 -binary | openssl base64 | tr +/ -_ | tr -d =
+```
+
+通过上述命令，我们得到了一个 md5 值:cPnjBG9bAZvY_jbPOj13mA，这个非常重要。接下来，构造合的 URL 和指令 secure_link 相关。如果 secure_link 指令的配置如下:
+
+```shell
+secure_link $arg_md5,$arg_expires;
+```
+
+那么我们的请求的 url 中必须带上 md5 和 expires 参数，例如:
+
+```shell
+http://180.76.152.113:9008/test.png?md5=cPnjBG9bAZvY_jbPOj13mA&expires=1580907600
+```
+
+对于 Nginx 中的校验配置示例如下:
+
+```shell
+location ~* .(gif|jpg|png|swf|flv|mp4)$  {
+    secure_link $arg_md5,$arg_expires;
+    secure_link_md5 "$secure_link_expires$uri$remote_addr secret";
+
+    # 空字符串，校验不通过
+    if ($secure_link = "") {
+        return 403;
+    }
+
+    # 时间过期
+    if ($secure_link = "0") {
+        return 410 "URL过期，请重新生成";
+    }
+
+    root /root/test;
 }
+```
 
-#设定http服务器，利用它的反向代理功能提供负载均衡支持
+在 Nginx 的配置中，除了前面提到的 secure_link 和 secure_link_md5 指令外，我们对通过校验和校验失败的情况进行了处理。接下来请看实验部分。
+
+#### 案例实战
+
+##### refer 模块防盗链测试
+
+在 nginx.conf 中加入如下防盗配置:
+
+```shell
+...
 http {
-    #设定mime类型(邮件支持类型),类型由mime.types文件定义
-    include       D:/Tools/nginx-1.10.1/conf/mime.types;
-    default_type  application/octet-stream;
+    ...
+    server {
+       listen 9008;
 
-    #设定日志
-	log_format  main  '[$remote_addr] - [$remote_user] [$time_local] "$request" '
-                      '$status $body_bytes_sent "$http_referer" '
-                      '"$http_user_agent" "$http_x_forwarded_for"';
+       location / {
+           valid_referers none blocked *.domain.pub www.domain.com/nginx server_names ~\.baidu\.;
+           if ($invalid_referer) {
+              return 403;
+           }
+           return 200 "valid\n";
+       }
+    }
+    ...
+}
+...
+```
 
-    access_log    D:/Tools/nginx-1.10.1/logs/access.log main;
-    rewrite_log     on;
+重新加载或者启动 Nginx 后，我们进行如下操作:
 
-    #sendfile 指令指定 nginx 是否调用 sendfile 函数（zero copy 方式）来输出文件，对于普通应用，
-    #必须设为 on,如果用来进行下载等应用磁盘IO重负载应用，可设置为 off，以平衡磁盘与网络I/O处理速度，降低系统的uptime.
-    sendfile        on;
-    #tcp_nopush     on;
+```bash
+[shen@shen Desktop]$ curl -H 'referer: http://www.domain.com/test' http://180.76.152.113:9008 
+<html>
+<head><title>403 Forbidden</title></head>
+<body>
+<center><h1>403 Forbidden</h1></center>
+<hr><center>nginx/1.17.6</center>
+</body>
+</html>
+[shen@shen Desktop]$ curl -H 'referer: http://www.domain.com/nginx' http://180.76.152.113:9008 
+valid
+[shen@shen Desktop]$ curl -H 'referer: ' http://180.76.152.113:9008 
+valid
+[shen@shen Desktop]$ curl http://180.76.152.113:9008 
+valid
+[shen@shen Desktop]$ curl -H 'referer: http://www.domain.pub/test' http://180.76.152.113:9008 
+valid
+```
 
-    #连接超时时间
-    keepalive_timeout  120;
-    tcp_nodelay        on;
+第一个 http 请求 referer 的值存在，但是没有匹配后面的域名，所以返回403。其余的请求中 referer 值要么不存在，要么没有这个头部，要么匹配了后面的域名正则表达，都通过了 referer 校验，所以都返回 “valid” 字符串。我们通过构造不同的 referer 头部字段成功的绕过了 Nginx 的referer 模块校验，也说明了这种防盗的方式极不靠谱。
 
-	#gzip压缩开关
-	#gzip  on;
+##### secure_link 防盗链测试
 
-    #设定实际的服务器列表
-    upstream zp_server1{
-        server 127.0.0.1:8089;
+我们准备一个静态图片, 名为 test.png，放到搭建了 Nginx 的服务器上，全路径为 /root/test/test.png。
+我们准备 Nginx 配置如下:
+
+```shell
+...
+http {
+    ...
+    server {
+       listen  8000;
+
+       location / {
+           # return 200 "$remote_addr";
+           root /root/test;
+       }
     }
 
-    #HTTP服务器
     server {
-        #监听80端口，80端口是知名端口号，用于HTTP协议
-        listen       80;
+       listen 8001;
 
-        #定义使用www.xx.com访问
-        server_name  www.helloworld.com;
+       location ~* .(jpg|png|flv|mp4)$  {
+          secure_link $arg_md5,$arg_expires;
+          secure_link_md5 "$secure_link_expires$uri$remote_addr secret";
 
-		#首页
-		index index.html
+          # 空字符串，校验不通过
+          if ($secure_link = "") {
+             return 403;
+          }
 
-		#指向webapp的目录
-		root D:\01_Workspace\Project\github\zp\SpringNotes\spring-security\spring-shiro\src\main\webapp;
+          # 时间过期
+          if ($secure_link = "0") {
+             return 410;
+          }
 
-		#编码格式
-		charset utf-8;
-
-		#代理配置参数
-        proxy_connect_timeout 180;
-        proxy_send_timeout 180;
-        proxy_read_timeout 180;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarder-For $remote_addr;
-
-        #反向代理的路径（和upstream绑定），location 后面设置映射的路径
-        location / {
-            proxy_pass http://zp_server1;
-        }
-
-        #静态文件，nginx自己处理
-        location ~ ^/(images|javascript|js|css|flash|media|static)/ {
-            root D:\01_Workspace\Project\github\zp\SpringNotes\spring-security\spring-shiro\src\main\webapp\views;
-            #过期30天，静态文件不怎么更新，过期可以设大一点，如果频繁更新，则可以设置得小一点。
-            expires 30d;
-        }
-
-        #设定查看Nginx状态的地址
-        location /NginxStatus {
-            stub_status           on;
-            access_log            on;
-            auth_basic            "NginxStatus";
-            auth_basic_user_file  conf/htpasswd;
-        }
-
-        #禁止访问 .htxxx 文件
-        location ~ /\.ht {
-            deny all;
-        }
-
-		#错误处理页面（可选择性配置）
-		#error_page   404              /404.html;
-		#error_page   500 502 503 504  /50x.html;
-        #location = /50x.html {
-        #    root   html;
-        #}
+          # 校验通过，访问对的静态资源
+          root /root/test;
+       }
     }
 }
+...
 ```
 
-好了，让我们来试试吧：
+首先，在浏览器上访问8000端口我们可以获取对应的 $remote_addr 变量值(打开 return 的注释配置)，结果为103.46.244.69， 这是客户端请求时的对外 IP。访问浏览器上访问8000端口，URI=/test.png， 可以看到这个静态图片。
 
-1.  启动 webapp，注意启动绑定的端口要和 nginx 中的 `upstream` 设置的端口保持一致。
-2.  更改 host：在 C:\Windows\System32\drivers\etc 目录下的 host 文件中添加一条 DNS 记录
+![图片描述](https://blog-figure-bed.oss-cn-shanghai.aliyuncs.com/2020/03/2020-05-12-153349.png)
 
+接下来，我们在访问8001端口，URI=/test.png时，可以发现返回403页面，说明安全模块生效。
+
+![图片描述](https://blog-figure-bed.oss-cn-shanghai.aliyuncs.com/2020/03/2020-05-12-153400.png)
+
+当前时间为2020年02月05日晚上9点半，我们找一个过期时间晚上10点，得到相应的时间戳为1580911200。按照 secure_link_md5 指令格式，使用如下 shell 命令生成 md5 值:
+
+```shell
+[shen@shen Desktop]$ echo -n '1580911200/test.png103.46.244.69 secret' | openssl md5 -binary | openssl base64 | tr +/ -_ | tr -d =
+KnJx3J6fN_0Qc1W5TqEVXw
 ```
-127.0.0.1 www.helloworld.com
+
+这样可以得到我们的安全访问 URL 为:
+
+```shell
+# 访问静态资源test.png的安全URL为:
+http://180.76.152.113:8001/test.png?md5=KnJx3J6fN_0Qc1W5TqEVXw&expires=1580911200
 ```
 
-3.  启动前文中 startup.bat 的命令
-4.  在浏览器中访问 www.helloworld.com，不出意外，已经可以访问了。
+再次到浏览器上访问时候，我就可以看到静态图片了。
 
-### Https 反向代理
+![图片描述](https://blog-figure-bed.oss-cn-shanghai.aliyuncs.com/2020/03/2020-05-12-153424.png)
 
-一些对安全性要求比较高的站点，可能会使用 HTTPS（一种使用 ssl 通信标准的安全 HTTP 协议）。
+此外，我们还可以等到10点之后，测试过期后的结果。在过期之后再用这个 URL 访问时无法查看图片，而且返回的是 410 的状态码，这说明 Nginx 成功检测到这个密钥值已经过期。
 
-这里不科普 HTTP 协议和 SSL 标准。但是，使用 nginx 配置 https 需要知道几点：
+#### 小结
 
-- HTTPS 的固定端口号是 443，不同于 HTTP 的 80 端口
-- SSL 标准需要引入安全证书，所以在 nginx.conf 中你需要指定证书和它对应的 key
-
-其他和 http 反向代理基本一样，只是在 `Server` 部分配置有些不同。
-
-```nginx
-  #HTTP服务器
-  server {
-      #监听443端口。443为知名端口号，主要用于HTTPS协议
-      listen       443 ssl;
-
-      #定义使用www.xx.com访问
-      server_name  www.helloworld.com;
-
-      #ssl证书文件位置(常见证书文件格式为：crt/pem)
-      ssl_certificate      cert.pem;
-      #ssl证书key位置
-      ssl_certificate_key  cert.key;
-
-      #ssl配置参数（选择性配置）
-      ssl_session_cache    shared:SSL:1m;
-      ssl_session_timeout  5m;
-      #数字签名，此处使用MD5
-      ssl_ciphers  HIGH:!aNULL:!MD5;
-      ssl_prefer_server_ciphers  on;
-
-      location / {
-          root   /root;
-          index  index.html index.htm;
-      }
-  }
-```
+一般的 Nginx 防盗链手段都是通过 referer 字段来判断请求的来源地，由此去判定请求是否合法。但是该字段容易伪造，所以很少用该方法实现防盗功能。而Nginx 的 secure_link 模块主要是使用 hash 算法加密方式，一般用于图片、视频下载，生成下载 URL，安全性高。此外，我们也可以使用一些第三方的模块增强 Nginx 的防盗链功能，比如常用的第三放模块ngx_http_accesskey_module 可用于实现文件下载的防盗功能。
 
 ### 负载均衡
 
@@ -388,12 +486,6 @@ nginx.conf 配置如下：
 
 ```nginx
 http {
-     #设定mime类型,类型由mime.type文件定义
-    include       /etc/nginx/mime.types;
-    default_type  application/octet-stream;
-    #设定日志格式
-    access_log    /var/log/nginx/access.log;
-
     #设定负载均衡的服务器列表
     upstream load_balance_server {
         #weigth参数表示权值，权值越高被分配到的几率越大
@@ -401,12 +493,10 @@ http {
         server 192.168.1.12:80   weight=1;
         server 192.168.1.13:80   weight=6;
     }
-
    #HTTP服务器
    server {
         #侦听80端口
         listen       80;
-
         #定义使用www.xx.com访问
         server_name  www.helloworld.com;
 
@@ -414,7 +504,8 @@ http {
         location / {
             root        /root;                 #定义服务器的默认网站根目录位置
             index       index.html index.htm;  #定义首页索引文件的名称
-            proxy_pass  http://load_balance_server ;#请求转向load_balance_server 定义的服务器列表
+            #请求转向load_balance_server 定义的服务器列表
+            proxy_pass  http://load_balance_server ;
 
             #以下是一些反向代理的配置(可选择性配置)
             #proxy_redirect off;
@@ -441,9 +532,7 @@ http {
 
 Nginx 提供了多种负载均衡策略，让我们来一一了解一下：
 
-负载均衡策略在各种分布式系统中基本上原理一致，对于原理有兴趣，不妨参考 [负载均衡](https://dunwu.github.io/blog/design/theory/load-balance-theory/)
-
-##### 轮询
+##### 轮询（默认）
 
 ```nginx
 upstream bck_testing_01 {
@@ -464,7 +553,30 @@ upstream bck_testing_01 {
 }
 ```
 
+##### IP Hash
+
+`ip_hash` 可以保证用户访问可以请求到上游服务中的固定的服务器，前提是用户ip没有发生更改。
+使用ip_hash的注意点：
+不能把后台服务器直接移除，只能标记`down`.
+
+> If one of the servers needs to be temporarily removed, it should be marked with the down parameter in order to preserve the current hashing of client IP addresses.
+
+```nginx
+upstream bck_testing_01 {
+
+  ip_hash;
+
+  # with default weight for all (weight=1)
+  server 192.168.250.220:8080
+  server 192.168.250.221:8080
+  server 192.168.250.222:8080
+
+}
+```
+
 ##### 最少连接
+
+根据最少的连接数去分配请求，以此保证服务器分配的均衡。
 
 ```nginx
 upstream bck_testing_01 {
@@ -489,22 +601,9 @@ upstream bck_testing_01 {
 }
 ```
 
-##### IP Hash
+##### 普通 Hash（URL）
 
-```nginx
-upstream bck_testing_01 {
-
-  ip_hash;
-
-  # with default weight for all (weight=1)
-  server 192.168.250.220:8080
-  server 192.168.250.221:8080
-  server 192.168.250.222:8080
-
-}
-```
-
-##### 普通 Hash
+根据每次请求的url地址，hash后访问到固定的服务器节点
 
 ```nginx
 upstream bck_testing_01 {
@@ -519,133 +618,364 @@ upstream bck_testing_01 {
 }
 ```
 
-### 网站有多个 webapp 的配置
+##### 一致性 Hash 算法
 
-当一个网站功能越来越丰富时，往往需要将一些功能相对独立的模块剥离出来，独立维护。这样的话，通常，会有多个 webapp。
+详细参考: [分布式系统中一致性哈希算法](https://www.cnblogs.com/christopherchan/p/11410108.html)
 
-举个例子：假如 www.helloworld.com 站点有好几个 webapp，finance（金融）、product（产品）、admin（用户中心）。访问这些应用的方式通过上下文(context)来进行区分:
+#### upstream 指令参数
 
-www.helloworld.com/finance/
+- max_conns
 
-www.helloworld.com/product/
+  限制每台server的连接数，用于保护避免过载，可起到限流作用。
+  测试参考配置如下：
 
-www.helloworld.com/admin/
+  ```nginx
+  # worker进程设置1个，便于测试观察成功的连接数
+  worker_processes  1;
+  
+  upstream tomcats {
+          server 192.168.1.173:8080 max_conns=2;
+          server 192.168.1.174:8080 max_conns=2;
+          server 192.168.1.175:8080 max_conns=2;
+  }
+  ```
 
-我们知道，http 的默认端口号是 80，如果在一台服务器上同时启动这 3 个 webapp 应用，都用 80 端口，肯定是不成的。所以，这三个应用需要分别绑定不同的端口号。
+- slow_start
 
-那么，问题来了，用户在实际访问 www.helloworld.com 站点时，访问不同 webapp，总不会还带着对应的端口号去访问吧。所以，你再次需要用到反向代理来做处理。
+  ***商业版，需要付费*** ，服务器慢慢的加入到集群中，便于运维监控
+  配置参考如下：
 
-配置也不难，来看看怎么做吧：
+  ```nginx
+  upstream tomcats {
+          server 192.168.1.173:8080 weight=6 slow_start=60s;
+  #       server 192.168.1.190:8080;
+          server 192.168.1.174:8080 weight=2;
+          server 192.168.1.175:8080 weight=2;
+  }
+  ```
+
+  注意
+
+  - 该参数不能使用在`hash`和`random load balancing`中。
+  - 如果在 upstream 中只有一台 server，则该参数失效。
+
+- down / backup
+
+  `down` 用于标记服务节点不可用：
+
+  ```nginx
+  upstream tomcats {
+          server 192.168.1.173:8080 down;
+  #       server 192.168.1.190:8080;
+          server 192.168.1.174:8080 weight=1;
+          server 192.168.1.175:8080 weight=1;
+  }
+  ```
+
+  `backup`表示当前服务器节点是备用机，只有在其他的服务器都宕机以后，自己才会加入到集群中，被用户访问到：
+
+  ```nginx
+  upstream tomcats {
+          server 192.168.1.173:8080 backup;
+  #       server 192.168.1.190:8080;
+          server 192.168.1.174:8080 weight=1;
+          server 192.168.1.175:8080 weight=1;
+  }
+  ```
+
+  注意
+
+  - `backup`参数不能使用在`hash`和`random load balancing`中。
+
+- max_fails / fail_timeout
+
+  `max_fails`：表示失败几次，则标记server已`宕机`，剔出上游服务。
+  `fail_timeout`：表示失败的重试时间。
+  假设目前设置如下：
+
+  ```nginx
+  upstream tomcats {
+          server 192.168.1.173:8080 max_fails=2 fail_timeout=15s;
+  #       server 192.168.1.190:8080;
+          server 192.168.1.174:8080 weight=1;
+          server 192.168.1.175:8080 weight=1;
+  }
+  ```
+
+  则代表在15秒内请求某一server失败达到2次后，则认为该server已经挂了或者宕机了，随后再过15秒，这15秒内不会有新的请求到达刚刚挂掉的节点上，而是会请求到正常运作的server，15秒后会再有新请求尝试连接挂掉的server，如果还是失败，重复上一过程，直到恢复。
+
+- Keepalived 提高吞吐量
+
+  `keepalived`： 设置长连接处理的数量
+  `proxy_http_version`：设置长连接http版本为1.1
+  `proxy_set_header`：清除connection header 信息
+
+  ```nginx
+  upstream tomcats {
+  #       server 192.168.1.173:8080 max_fails=2 fail_timeout=1s;
+          server 192.168.1.190:8080;
+  #       server 192.168.1.174:8080 weight=1;
+  #       server 192.168.1.175:8080 weight=1;
+          keepalive 32;
+  }
+  
+  server {
+          listen       80;
+          server_name  www.tomcats.com;
+  
+          location / {
+              proxy_pass  http://tomcats;
+              proxy_http_version 1.1;
+              proxy_set_header Connection "";
+          }
+  }
+  ```
+
+详细指令参数参考官方文档：http://nginx.org/en/docs/stream/ngx_stream_upstream_module.html
+
+### Nginx 缓存
+
+#### Nginx 中的缓存介绍
+
+由于 Nginx 是在网站的所有其他后台服务的最前线，它接收的请求和流量是后台服务的数倍甚至数十倍之多。因此，用好 Nginx 的缓存功能对于大型网站而言至关重要。Nginx 中的缓存功能优势如下：
+
+- 缓存在nginx端，提升所有访问到nginx这一端的用户
+- 有效降低上游服务器的负载
+- 减少上游服务器之间的流量消耗
+
+Nginx 的 Web 缓存服务主要由 `proxy_cache` 相关指令集和 `fastcgi_cache` 相关指令集构成，前者用于反向代理时，对后端内容源服务器进行缓存，后者主要用于对 FastCGI 的动态程序进行缓存。两者的功能基本上一样。强大的缓存功能也成为了 Nginx 吸引众多用户的重要因素之一。
+
+#### Nginx中缓存指令
+
+1. **expires指令**
+
+Nginx 中的 `expires` 指令通过控制 HTTP 相应中的『Expires』 和 『Cache-Control』的头部值，达到控制浏览器缓存时间的效果。指令格式如下：
 
 ```nginx
-http {
-	#此处省略一些基本配置
-
-	upstream product_server{
-		server www.helloworld.com:8081;
-	}
-
-	upstream admin_server{
-		server www.helloworld.com:8082;
-	}
-
-	upstream finance_server{
-		server www.helloworld.com:8083;
-	}
-
-	server {
-		#此处省略一些基本配置
-		#默认指向product的server
-		location / {
-			proxy_pass http://product_server;
-		}
-
-		location /product/{
-			proxy_pass http://product_server;
-		}
-
-		location /admin/ {
-			proxy_pass http://admin_server;
-		}
-
-		location /finance/ {
-			proxy_pass http://finance_server;
-		}
-	}
-}
+Syntax:	expires [modified] time;
+expires epoch | max | off;
+Default:	
+expires off;
+Context: http, server, location, if in location
 ```
 
-### 静态站点
+Nginx 中的时间单位有s(秒), m(分), h(小), d(天)。指令参数说明:
 
-有时候，我们需要配置静态站点(即 html 文件和一堆静态资源)。
+- epoch: 指定"Expires"的值为1, 即 January,1970,00:00:01 GMT;
+- max: 指定"Expires"的值为31 December2037 23:59:59GMT, "Cache-Control"的值为10年;
+- -1：指定"Expires"的值为当前服务器时间-1s，即永远过期;
+  off：不修改"Expires"和"Cache-Control"的值
+- time 中出现@表示具体的时间，比如@18h30m表示的是下午6点半;
 
-举例来说：如果所有的静态资源都放在了 `/app/dist` 目录下，我们只需要在 `nginx.conf` 中指定首页以及这个站点的 host 即可。
-
-配置如下：
+官方的示例如下:
 
 ```nginx
-worker_processes  1;
+expires    24h;       		# 24小时过期
+expires    modified +24h; 
+expires    @24h;      		# 24 点过期
+expires    0;         		# 不缓存，立即过期
+expires    -1;        		# 永不过期
+expires    epoch;     		# 不设置缓存
+expires    $expires;
+```
 
-events {
-	worker_connections  1024;
-}
+2. **proxy 模块中的 cache 相关指令**
 
-http {
-    include       mime.types;
-    default_type  application/octet-stream;
-    sendfile        on;
-    keepalive_timeout  65;
+Nginx 的 proxy 模块中定义了许多和 cache 相关的模块，这是配置 http 请求代理的缓存功能。
 
-    gzip on;
-    gzip_types text/plain application/x-javascript text/css application/xml text/javascript application/javascript image/jpeg image/gif image/png;
-    gzip_vary on;
+通常情况下，我们使用 proxy_cache 指令开启 Nginx 缓存功能，用 proxy_cache_path 指令来设置缓存的路径和其他配置。两个指令的用法如下：
 
+```nginx
+Syntax:	proxy_cache zone | off;
+Default: proxy_cache off;
+Context: http, server, location
+
+Syntax:	proxy_cache_path path [levels=levels] [use_temp_path=on|off] keys_zone=name:size [inactive=time] [max_size=size] [manager_files=number] [manager_sleep=time] [manager_threshold=time] [loader_files=number] [loader_sleep=time] [loader_threshold=time] [purger=on|off] [purger_files=number] [purger_sleep=time] [purger_threshold=time];
+Default: —
+Context: http\
+```
+
+proxy_cache_path 指令中有较多的参数，部分重要参数说明如下:
+
+- **proxy_cache_path: 定义缓存目录;**
+- **keys_zone: 设置共享内存以及占用空间大小**
+  - name: 共享内存名
+  - size: 共享内存大小
+- **max_size: 设置最大的缓存文件大小**
+- **inactive 超过此时间则被清理**
+- levels: 定义缓存路径的目录等级，最多3级
+- **use_temp_path:临时目录，使用后会影响nginx性能**
+  - on: 使用proxy_temp_path定义的目录
+  - off:
+
+```nginx
+# proxy_cache_path 设置缓存目录
+#       keys_zone 设置共享内存以及占用空间大小
+#       max_size 设置缓存大小
+#       inactive 超过此时间则被清理
+#       use_temp_path 临时目录，使用后会影响nginx性能
+proxy_cache_path /usr/local/nginx/upstream_cache keys_zone=mycache:5m max_size=1g inactive=1m use_temp_path=off;
+```
+
+其余的重要的缓存指令有:
+
+- proxy_cache_key: 配置缓存的关键字，格式如下:
+
+```nginx
+Syntax:	proxy_cache_key string;
+Default: proxy_cache_key $scheme$proxy_host$request_uri;
+Context: http, server, location
+```
+
+示例：
+
+```nginx
+proxy_cache_key "$host$request_uri $cookie_user";
+```
+
+- proxy_cache_valid: 配置缓存什么样的响应，缓存多长时间。注意，如果只设置了缓存时间，只缓存只针对相应码200, 301和302的请求 。格式如下:
+
+```nginx
+Syntax:	proxy_cache_valid [code ...] time;
+Default: —
+Context: http, server, location
+```
+
+示例：
+
+```nginx
+proxy_cache_valid 200 302 10m;
+proxy_cache_valid 404      1m;
+
+# 只设置了缓存时间，只对200，301和302有效
+proxy_cache_valid 5m;
+
+proxy_cache_valid 200 302 10m;
+proxy_cache_valid 301      1h;
+
+# any表示所有相应码
+proxy_cache_valid any      1m;
+```
+
+- proxy_cache_methods: 对哪种 method 的请求使用缓存返回响应。
+
+```nginx
+Syntax:	proxy_cache_methods GET | HEAD | POST ...;
+Default: proxy_cache_methods GET HEAD;
+Context: http, server, location
+```
+
+#### Nginx 缓存实战案例
+
+准备好 proxy_cache 缓存相关的配置，如下:
+
+```nginx
+    # 定义上游服务器
+    upstream backends {
+        server 127.0.0.1:8000;
+        server 127.0.0.1:8001;
+        server 127.0.0.1:8002;
+    }
+    
+    # proxy_cache_path 指令
+    proxy_cache_path /root/test/cache levels=1:2 keys_zone=nginx_cache:10m max_size=10g inactive=60m use_temp_path=off;
+    
     server {
-		listen       80;
-		server_name  static.zp.cn;
+       listen  80;
 
-		location / {
-			root /app/dist;
-			index index.html;
-			#转发任何请求到 index.html
-		}
-	}
+       location / {
+          proxy_pass http://backends;
+          proxy_cache nginx_cache;
+          # 状态码为200和301的缓存1分钟
+          proxy_cache_valid 200 301 1m;
+          # 其余的缓存10分钟
+          proxy_cache_valid any 10m;
+          # response响应的头信息中定义缓存的状态（有没有命中）
+          proxy_cache_key "$host$uri$is_args$args";
+          expires 1d;
+          proxy_no_cache $cookie_nocache $arg_nocache $arg_comment;
+          proxy_no_cache $http_pragma    $http_authorization;
+          # add_header 响应添加缓冲命中结果
+          add_header Nginx-Cache "$upstream_cache_status";
+       }
 }
 ```
 
-然后，添加 HOST：
+### Nginx配置HTTPS域名证书
 
-127.0.0.1 static.zp.cn
+#### 安装SSL模块
 
-此时，在本地浏览器访问 static.zp.cn ，就可以访问静态站点了。
+要在nginx中配置https，就必须安装ssl模块，也就是: `http_ssl_module`。
 
-### 搭建文件服务器
+- 进入到nginx的解压目录： /home/software/nginx-1.16.1
 
-有时候，团队需要归档一些数据或资料，那么文件服务器必不可少。使用 Nginx 可以非常快速便捷的搭建一个简易的文件服务。
+- 新增ssl模块(原来的那些模块需要保留)
 
-Nginx 中的配置要点：
+  ```nginx
+  ./configure \
+  --prefix=/usr/local/nginx \
+  --pid-path=/var/run/nginx/nginx.pid \
+  --lock-path=/var/lock/nginx.lock \
+  --error-log-path=/var/log/nginx/error.log \
+  --http-log-path=/var/log/nginx/access.log \
+  --with-http_gzip_static_module \
+  --http-client-body-temp-path=/var/temp/nginx/client \
+  --http-proxy-temp-path=/var/temp/nginx/proxy \
+  --http-fastcgi-temp-path=/var/temp/nginx/fastcgi \
+  --http-uwsgi-temp-path=/var/temp/nginx/uwsgi \
+  --http-scgi-temp-path=/var/temp/nginx/scgi  \
+  --with-http_ssl_module
+  ```
 
-- 将 autoindex 开启可以显示目录，默认不开启。
-- 将 autoindex_exact_size 开启可以显示文件的大小。
-- 将 autoindex_localtime 开启可以显示文件的修改时间。
-- root 用来设置开放为文件服务的根路径。
-- charset 设置为 `charset utf-8,gbk;`，可以避免中文乱码问题（windows 服务器下设置后，依然乱码，本人暂时没有找到解决方法）。
+- 编译和安装
 
-一个最简化的配置如下：
+  ```bash
+  make
+  make install
+  ```
 
-```nginx
-autoindex on;# 显示目录
-autoindex_exact_size on;# 显示文件大小
-autoindex_localtime on;# 显示文件时间
+#### 配置HTTPS
 
-server {
-    charset      utf-8,gbk; # windows 服务器下设置后，依然乱码，暂时无解
-    listen       9050 default_server;
-    listen       [::]:9050 default_server;
-    server_name  _;
-    root         /share/fs;
-}
+- 把ssl证书 `*.crt` 和 私钥 `*.key` 拷贝到`/usr/local/nginx/conf`目录中。
+
+- 新增 server 监听 443 端口：
+
+  ```nginx
+  server {
+      listen       443;
+      server_name  www.imoocdsp.com;
+  
+      # 开启ssl
+      ssl     on;
+      # 配置ssl证书
+      ssl_certificate      1_www.imoocdsp.com_bundle.crt;
+      # 配置证书秘钥
+      ssl_certificate_key  2_www.imoocdsp.com.key;
+  
+      # ssl会话cache
+      ssl_session_cache    shared:SSL:1m;
+      # ssl会话超时时间
+      ssl_session_timeout  5m;
+  
+      # 配置加密套件，写法遵循 openssl 标准
+      ssl_protocols TLSv1 TLSv1.1 TLSv1.2;
+      ssl_ciphers ECDHE-RSA-AES128-GCM-SHA256:HIGH:!aNULL:!MD5:!RC4:!DHE;
+      ssl_prefer_server_ciphers on;
+      
+      location / {
+          proxy_pass http://tomcats/;
+          index  index.html index.htm;
+      }
+   }
+  ```
+
+#### reload nginx
+
+```bash
+./nginx -s reload
 ```
+
+> 腾讯云Nginx配置https文档地址：https://cloud.tencent.com/document/product/400/35244
 
 ## 资源
 
