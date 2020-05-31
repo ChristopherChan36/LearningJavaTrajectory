@@ -60,7 +60,7 @@ Nginx 作为 Web 服务器能独立提供 Http 服务。另外，我们常常通
 
 当我们在外网访问百度的时候，其实会进行一个转发，代理到内网去，这就是所谓的反向代理，即反向代理『代理』的是服务器端，而且这一个过程对于客户端而言是透明的。
 
-### 什么是负载均衡 ？
+### 什么是负载均衡
 
 **Load balancing，即负载均衡，是一种计算机技术，用来在多个计算机（计算机集群）、网络连接、CPU、磁盘驱动器或其他资源中分配负载，以达到最优化资源使用、最大化吞吐率、最小化响应时间、同时避免过载的目的。**
 
@@ -101,15 +101,69 @@ Worker 进程是比较累的，负责处理客户端的连接请求，它充分�
 
 ![Nginx 的 Master-Worker 模式](https://blog-figure-bed.oss-cn-shanghai.aliyuncs.com/2020/03/2020-05-04-140201.png)
 
-#### Master进程的作用
+#### Master-Worker 机制的好处
 
-**读取并验证配置文件nginx.conf；管理worker进程；**
+- 可以使用nginx-s reload 热部署
 
-#### Worker进程的作用
+- 每个worker是独立的进程，不需要加锁，省掉了锁带来的开销。采用独立的进程，可以让互相之间不会影响，一个进程退出后，其它进程还在工作，服务不会中断，master 进程则很快启动新的 worker 进程。
 
-**每一个Worker进程都维护一个线程（避免线程切换），处理连接和请求；注意Worker进程的个数由配置文件决定，一般和CPU个数相关（有利于进程切换），配置几个就有几个Worker进程。**
+**Master进程的作用**
 
-> 详细安装方法及相应配置详解请参考：[Nginx 运维](nginx-ops.md)
+读取并验证配置文件nginx.conf；管理worker进程；
+
+**Worker进程的作用**
+
+每一个Worker进程都维护一个线程（避免线程切换），处理连接和请求；注意Worker进程的个数由配置文件决定，一般和CPU个数相关（有利于进程切换），配置几个就有几个Worker进程。
+
+#### 需要设置多少个 Worker
+
+Nginx 同 redis 类似都采用了 **IO 多路复用机制**，每个 worker 都是一个独立的进程，但每个进程里只有一个主线程，通过异步非阻塞的方式来处理请求，即使是千上万个请求也不在话下。每个 worker 的线程可以把一个 cpu 的性能发挥到极致。所以 **worker 数和服务器的 cpu 数相等是最为适宜**的。设少了会浪费 cpu，设多了会造成 cpu 频繁切换上下文带来的损耗。
+
+```nginx
+# 设置 worker 数量。
+worker_processes 4 
+# work 绑定 cpu(4 work 绑定 4cpu)。 
+worker_cpu_affinity 0001 0010 0100 1000 
+# work 绑定 cpu (4 work 绑定 8cpu 中的 4 个) 。 
+worker_cpu_affinity 0000001 00000010 00000100 00001000
+```
+
+#### 连接数 worker_connection
+
+这个值是表示每个 worker 进程所能建立连接的最大值，所以，一个 nginx 能建立的最大连接数，应该是 worker_connections * worker_processes。当然，这里说的是最大连接数，对于 HTTP 请 求 本 地 资 源 来 说 ， 能 够 支 持 的 最 大 并 发 数 量 是 worker_connections * worker_processes，如果是支持 http1.1 的浏览器每次访问要占两个连接，所以普通的静态访 问最大并发数是： worker_connections * worker_processes /2，而如果是 HTTP 作 为反向代理来说，最大并发数量应该是 worker_connections * worker_processes/4。因为作为反向代理服务器，每个并发会建立与客户端的连接和与后端服 务的连接，会占用两个连接。
+
+### Nginx 模块开发
+
+由于Nginx的模块化特性，所以可以支持模块配置，也可以自定义模块，Nginx的模块开发，程序员目前还不需要太深入
+
+**Nginx模块分类**
+
+![Nginx 模块分类](https://blog-figure-bed.oss-cn-shanghai.aliyuncs.com/2020/05/2020-05-31-063252.png)
+
+#### Nginx配置选项
+
+解压nginx后的配置操作示例
+
+```nginx
+./configure --prefix=/usr/local/nginx --with-http_stub_status_module --with-pcre  --with-http_ssl_module
+```
+
+| 选项                            | 解释                                                         |
+| :------------------------------ | :----------------------------------------------------------- |
+| --prefix=<path>                 | Nginx安装的根目录，所有其他安装路径都要依赖于该选项          |
+| --sbin- path=<path>             | 指定Nginx二进制文件的路径                                    |
+| --conf-path=<path>              | 指定nginx.conf配置文件的路径                                 |
+| --error-log- path=<path>        | 指定错误文件的路径                                           |
+| --user=name                     | worker进程运行的用户                                         |
+| --group=<group>                 | worker进程运行的组                                           |
+| --with-http_ssl_module          | 使用https协议模块。默认情况下该模块没有被构建。前提是openssl与openssl-devel已安装 |
+| --with-http_image_filter_module | 该模块被用作图像过滤器使用，将图像投递给客户前先进行过滤（需要libgd库） |
+| --with-http_stub_status_module  | 启用这个模块会收集Nginx自身状态信息，常用来做监控            |
+| --with-mail                     | 启用mail模块，默认没有被激活                                 |
+| --without-http_autoindex_module | 禁用：如果一个目录没有index文件，该模块能收集文件并列出      |
+| --add-module=<path>             | 添加第三方外部模块,每次添加新的模块都要重新编译              |
+
+> 详细安装方法及相应配置详解请参考：[Nginx 安装与配置](nginx-ops.md)
 
 ## 三、Nginx 进阶与实战
 
@@ -203,45 +257,9 @@ server {
 
 到此，就完成了。
 
-### Nginx 的 Http 模块介绍
-
-#### location 匹配
-
-location 匹配是在 FIND_CONFIG 阶段进行的，我们需要掌握 location 的匹配规则和匹配顺序。
-
-1. location 匹配规则
-
-| 规则 | 匹配                                                         |
-| :--- | :----------------------------------------------------------- |
-| =    | 严格匹配。如果请求匹配这个 location，那么将停止搜索并立即处理此请求 |
-| ~    | 区分大小写匹配(可用正则表达式)                               |
-| ~*   | 不区分大小写匹配(可用正则表达式)                             |
-| !~   | 区分大小写不匹配                                             |
-| !~*  | 不区分大小写不匹配                                           |
-| ^~   | 前缀匹配                                                     |
-| @    | “@” 定义一个命名的location，使用在内部定向时                 |
-| /    | 通用匹配，任何请求都会匹配到（默认）                         |
-
-2.  location 匹配顺序
-
-- “=” 精准匹配，如果匹配成功，则停止其他匹配
-- 普通字符串指令匹配，优先级是从长到短(匹配字符越多，则选择该匹配结果)。匹配成功的location如果使用^~，则停止其他匹配（正则匹配）
-- 正则表达式指令匹配，按照配置文件里的顺序(从上到下)，成功就停止其他匹配
-- 如果正则匹配成功，使用该结果;否则使用普通字符串匹配结果
-
-有一个简单总结如下：
-
-> (location =) > (location 完整路径) > (location ^~ 路径) > (location ,* 正则顺序) > (location 部分起始路径) > (location /)
-
-即：
-
-> (精确匹配）> (最长字符串匹配，但完全匹配) >（非正则匹配）>（正则匹配）>（最长字符串匹配，不完全匹配）>（location通配）
-
-![location 匹配顺序](https://blog-figure-bed.oss-cn-shanghai.aliyuncs.com/2020/03/2020-05-18-145056.png)
-
 ###  Nginx 防盗链配置
 
-#### 什么是盗链?
+#### 什么是盗链
 
 百度百科的解释如下:
 
@@ -249,7 +267,7 @@ location 匹配是在 FIND_CONFIG 阶段进行的，我们需要掌握 location 
 
 盗链在如今的互联网世界无处不在，盗图，盗视频、盗文章等等，都是通过获取正规网站的图片、视频、文章等的 url 地址，直接放到自己网站上使用而未经授权。 Nginx 在代理这类静态资源(图片、视频、文章等)时，可以通过配置实现防盗连的功能。
 
-#### 如何防盗链？
+#### 如何防盗链
 
 前面介绍到，盗链是直接使用正规网站保存图片、视频等的 URL 以获取相应的资源。最简单的防盗想法就是根据客户端请求资源时所携带的一些关键信息来验证请求的合法性，比如客户端 IP、请求 URL 中携带的 referer，如果不合法则直接拒绝请求。此外，由于这些基础信息都可以伪造，因此这样的基础手段也不一定安全。此外，还有登录认证、使用 cookie 等其他防盗连手段。另外，针对特定场景，比如流媒体直播中还有更为高级的防盗手段包括时间戳防盗链、swf 防盗链、回源鉴权防盗链等。
 
@@ -522,47 +540,30 @@ nginx.conf 配置如下：
 
 ```nginx
 http {
-    #设定负载均衡的服务器列表
+    # 设定负载均衡的服务器列表
     upstream load_balance_server {
-        #weigth参数表示权值，权值越高被分配到的几率越大
+        # weigth参数表示权值，权值越高被分配到的几率越大
         server 192.168.1.11:80   weight=5;
         server 192.168.1.12:80   weight=1;
         server 192.168.1.13:80   weight=6;
     }
-   #HTTP服务器
+   # HTTP服务器
    server {
-        #侦听80端口
+        # 侦听80端口
         listen       80;
-        #定义使用www.xx.com访问
+        # 定义使用www.xx.com访问
         server_name  www.helloworld.com;
 
-        #对所有请求进行负载均衡请求
+        # 对所有请求进行负载均衡请求
         location / {
-            root        /root;                 #定义服务器的默认网站根目录位置
-            index       index.html index.htm;  #定义首页索引文件的名称
             #请求转向load_balance_server 定义的服务器列表
-            proxy_pass  http://load_balance_server ;
-
-            #以下是一些反向代理的配置(可选择性配置)
-            #proxy_redirect off;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            #后端的Web服务器可以通过X-Forwarded-For获取用户真实IP
-            proxy_set_header X-Forwarded-For $remote_addr;
-            proxy_connect_timeout 90;          #nginx跟后端服务器连接超时时间(代理连接超时)
-            proxy_send_timeout 90;             #后端服务器数据回传时间(代理发送超时)
-            proxy_read_timeout 90;             #连接成功后，后端服务器响应时间(代理接收超时)
-            proxy_buffer_size 4k;              #设置代理服务器（nginx）保存用户头信息的缓冲区大小
-            proxy_buffers 4 32k;               #proxy_buffers缓冲区，网页平均在32k以下的话，这样设置
-            proxy_busy_buffers_size 64k;       #高负荷下缓冲大小（proxy_buffers*2）
-            proxy_temp_file_write_size 64k;    #设定缓存文件夹大小，大于这个值，将从upstream服务器传
-
-            client_max_body_size 10m;          #允许客户端请求的最大单文件字节数
-            client_body_buffer_size 128k;      #缓冲区代理缓冲用户端请求的最大字节数
+            proxy_pass  http://load_balance_server;
         }
     }
 }
 ```
+
+重启 Nginx，验证效果
 
 #### 负载均衡策略
 
@@ -572,10 +573,10 @@ Nginx 提供了多种负载均衡策略，让我们来一一了解一下：
 
 ```nginx
 upstream bck_testing_01 {
-  # 默认所有服务器权重为 1
-  server 192.168.250.220:8080
-  server 192.168.250.221:8080
-  server 192.168.250.222:8080
+    # 默认所有服务器权重为 1
+    server 192.168.250.220:8080
+    server 192.168.250.221:8080
+    server 192.168.250.222:8080
 }
 ```
 
@@ -583,9 +584,9 @@ upstream bck_testing_01 {
 
 ```nginx
 upstream bck_testing_01 {
-  server 192.168.250.220:8080   weight=3
-  server 192.168.250.221:8080              # default weight=1
-  server 192.168.250.222:8080              # default weight=1
+    server 192.168.250.220:8080   weight=3
+    server 192.168.250.221:8080              # default weight=1
+    server 192.168.250.222:8080              # default weight=1
 }
 ```
 
@@ -599,14 +600,12 @@ upstream bck_testing_01 {
 
 ```nginx
 upstream bck_testing_01 {
+    ip_hash;
 
-  ip_hash;
-
-  # with default weight for all (weight=1)
-  server 192.168.250.220:8080
-  server 192.168.250.221:8080
-  server 192.168.250.222:8080
-
+    # with default weight for all (weight=1)
+    server 192.168.250.220:8080
+    server 192.168.250.221:8080
+    server 192.168.250.222:8080
 }
 ```
 
@@ -616,12 +615,12 @@ upstream bck_testing_01 {
 
 ```nginx
 upstream bck_testing_01 {
-  least_conn;
+    least_conn;
 
-  # with default weight for all (weight=1)
-  server 192.168.250.220:8080
-  server 192.168.250.221:8080
-  server 192.168.250.222:8080
+    # with default weight for all (weight=1)
+    server 192.168.250.220:8080
+    server 192.168.250.221:8080
+    server 192.168.250.222:8080
 }
 ```
 
@@ -629,28 +628,41 @@ upstream bck_testing_01 {
 
 ```nginx
 upstream bck_testing_01 {
-  least_conn;
+    least_conn;
 
-  server 192.168.250.220:8080   weight=3
-  server 192.168.250.221:8080              # default weight=1
-  server 192.168.250.222:8080              # default weight=1
+    server 192.168.250.220:8080   weight=3
+    server 192.168.250.221:8080              # default weight=1
+    server 192.168.250.222:8080              # default weight=1
 }
 ```
 
-##### 普通 Hash（URL）
+##### 普通 Hash（URL ）
 
 根据每次请求的url地址，hash后访问到固定的服务器节点
 
 ```nginx
 upstream bck_testing_01 {
 
-  hash $request_uri;
+    hash $request_uri;
 
-  # with default weight for all (weight=1)
-  server 192.168.250.220:8080
-  server 192.168.250.221:8080
-  server 192.168.250.222:8080
+    # with default weight for all (weight=1)
+    server 192.168.250.220:8080
+    server 192.168.250.221:8080
+    server 192.168.250.222:8080
+}
+```
 
+##### fair（第三方）
+
+按后端服务器的响应时间来分配请求，响应时间短的优先分配
+
+```nginx
+upstream bck_testing_01 {
+    server 192.168.250.220:8080
+    server 192.168.250.221:8080
+    server 192.168.250.222:8080
+
+    fair;
 }
 ```
 
@@ -1013,7 +1025,36 @@ Context: http, server, location
 
 > 腾讯云Nginx配置https文档地址：https://cloud.tencent.com/document/product/400/35244
 
-## 资源
+### Nginx 配置-动静分离
+
+Nginx 动静分离简单来说就是把动态跟静态请求分开，不能理解成只是单纯的把动态页面和静态页面物理分离。严格意义上说应该是动态请求跟静态请求分开，可以理解成使用 Nginx 处理静态页面，Tomcat 处理动态页面。动静分离从目前实现角度来讲大致分为两种， 一种是纯粹把静态文件独立成单独的域名，放在独立的服务器上，也是目前主流推崇的方案； 另外一种方法就是动态跟静态文件混合在一起发布，通过 nginx 来分开。 通过 location 指定不同的后缀名实现不同的请求转发。通过 expires 参数设置，可以使浏览器缓存过期时间，减少与服务器之前的请求和流量。具体 Expires 定义：是给一个资 源设定一个过期时间，也就是说无需去服务端验证，直接通过浏览器自身确认是否过期即可， 所以不会产生额外的流量。此种方法非常适合不经常变动的资源。（如果经常更新的文件， 不建议使用 Expires 来缓存），我这里设置 3d，表示在这 3 天之内访问这个 URL，发送 一个请求，比对服务器该文件最后更新时间没有变化，则不会从服务器抓取，返回状态码 304，如果有修改，则直接从服务器重新下载，返回状态码 200。
+
+1. 服务器找个目录存放自己的静态文件
+
+   ![静态资源文件目录](https://blog-figure-bed.oss-cn-shanghai.aliyuncs.com/2020/05/2020-05-31-073012.png)
+
+2. 修改nginx.conf
+
+   ```nginx
+   server {
+       listen       80;
+       server_name  localhost;
+     
+       location /static {
+         alias   /usr/data/www;
+       }
+       location /image {
+         root /usr/data/;
+         autoindex on;
+       }
+   }
+   ```
+
+3. `./nginx -s reload`，验证效果
+
+添加监听端口、访问名字 重点是添加 location， 最后检查 Nginx 配置是否正确即可，然后测试动静分离是否成功，之需要删除后端 tomcat 服务器上的某个静态文件，查看是否能访问，如果可以访问说明静态资源 nginx 直接返回 了，不走后端 tomcat 服务器
+
+## 参考文档
 
 - [Nginx 的中文维基](http://tool.oschina.net/apidocs/apidoc?api=nginx-zh)
 - [Nginx 开发从入门到精通](http://tengine.taobao.org/book/index.html)
